@@ -172,9 +172,21 @@ Both return `state` unchanged on the callback, and both are normalized to the sa
   identity functions report a missing `email_verified` as `false`.
 
 The architecture does not depend on provider-specific code lifetimes or on PKCE. PKCE support differs by
-provider and app type, so this repo uses the same signed-state binding for both providers. You can add
-PKCE where your provider supports it; it complements the browser binding described here but does not
-replace it.
+provider and app type, so this repo uses the same signed-state binding for both providers.
+
+**PKCE is a recommended future enhancement, not implemented here.** The signed state binds the *callback*
+to the browser that started the sign-in. It does not bind the *authorization code* to that browser.
+PKCE ([RFC 7636](https://www.rfc-editor.org/rfc/rfc7636)) does, and it protects against a threat this repo
+does not fully cover: **authorization-code interception and injection**. An attacker who obtains a
+victim's code before it is used could submit it together with the attacker's *own* valid state and nonce.
+[RFC 9700](https://www.rfc-editor.org/rfc/rfc9700) (OAuth 2.0 Security Best Current Practice) recommends
+PKCE for confidential clients like this one for that reason. Support differs between providers:
+
+- Google's discovery document lists the `S256` code-challenge method.
+- LinkedIn documents PKCE only for native apps, on a separate endpoint, enabled on request.
+
+Add PKCE where your provider supports it. It complements the browser binding described here but does not
+replace it. See [Security limitations](#12-security-limitations-and-your-responsibilities).
 
 ## 8. Required environment variables
 
@@ -210,6 +222,12 @@ The four files in [`frontend/`](frontend/) are framework-free ES modules:
 2. Serve each callback page at the path you set in `GOOGLE_REDIRECT_URI` / `LINKEDIN_REDIRECT_URI`.
 3. **Use the same origin for start and callback.** `https://example.com` and `https://www.example.com`
    are different origins with separate `sessionStorage`. A mismatch shows up as "Sign-in expired".
+   This includes your builder's editor or preview. In a production WeWeb + Xano app, sign-ins started
+   from the WeWeb editor preview and completed on the production `www` domain failed intermittently.
+   Xano's request history showed why: the editor origin had issued a valid state, but the callback on
+   `www` arrived with no nonce, because the nonce was stored on the editor origin. Retrying from the
+   production domain worked. Xano was right to refuse these callbacks. Test sign-in only from the origin
+   that serves your callback page.
 4. Start and callback must happen **in the same tab**. The start scripts use `window.location.assign`;
    don't open the provider in a popup or new tab.
 5. Add `<meta name="referrer" content="no-referrer">` to the callback pages.
@@ -297,9 +315,32 @@ What it **does not** do:
 
 - **XSS on your frontend origin defeats it.** Script running on your origin can read `sessionStorage`.
   Use a Content Security Policy and keep third-party scripts off your sign-in and callback pages.
-- **No server-side single use.** A state can be verified more than once within its 10 minutes. Replay is
-  limited by the provider's single-use codes and by the browser deleting the nonce, and an attacker can
-  never obtain the victim's nonce. If you need strict single use, record used state signatures until expiry.
+- **No server-side single use.** A signed state expires after 10 minutes, but the server does not record
+  that it has been used, so it can be verified more than once within that window. A cross-browser replay
+  still needs the victim's nonce, which the browser deletes after one use and an attacker cannot obtain.
+  RFC 9700 nevertheless expects one-time CSRF tokens when PKCE or an OIDC `nonce` is not used. If you need
+  strict single use, record a hash of each used state until it expires (for example in a table with a
+  unique index) and refuse repeats.
+- **No PKCE, so authorization codes are not bound to the browser.** If a victim's unused code leaks (for
+  example through browser history, logs, a `Referer` header or a malicious extension), an attacker can
+  submit it with their own valid state and nonce, and verification will pass. Short code lifetimes, the
+  callback page removing `code` from the URL and `no-referrer` reduce the exposure but do not remove it.
+  PKCE closes this gap where the provider supports it (see [section 7](#7-how-google-and-linkedin-differ)).
+- **Identity comes from the UserInfo endpoint, not a validated ID token.** `continue` exchanges the code
+  directly with the provider over HTTPS, authenticated with your client secret, and reads the identity
+  from the OIDC UserInfo endpoint with the resulting access token. Google documents that a token received
+  this way, directly from Google, can be trusted without separate validation. If you change the flow to
+  rely on claims inside an ID token, you must validate it:
+  - always when it reaches you any other way (for example from the browser);
+  - when you add an OIDC `nonce`;
+  - or when you drop the UserInfo call.
+
+  Validating means checking the signature against the provider's published keys (`jwks_uri`), then
+  `iss`, `aud` (your client ID), `exp`, and `nonce` if you sent one.
+- **No provider refresh tokens.** The flow does not request offline access (for Google,
+  `access_type=offline`), so no refresh token is issued. The access token is used once for UserInfo and is
+  never stored or returned. Refreshing or rotating provider tokens is therefore not part of this reference.
+  Your **application session** (lifetime, renewal, rotation, revocation) is outside its scope.
 - **The HMAC comparison is a plain string comparison.** Xano has no constant-time compare. Timing attacks
   over the network against a 256-bit HMAC are not considered practical, but this is weaker than a
   constant-time check.

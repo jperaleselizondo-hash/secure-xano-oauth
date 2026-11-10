@@ -47,6 +47,9 @@ bound into that state. The nonce exists only in the starting tab's `sessionStora
 | Account takeover through email-based linking | Belongs to your integration logic. Link by `(provider, sub)`, and link by email only when it is verified on both sides. |
 | Pre-account-takeover via unverified sign-up | Belongs to your sign-up and email verification logic. |
 | State replay within 10 minutes | A state is not marked as used on the server. Replay requires the victim's nonce (unobtainable) and a fresh provider code bound to the same state. Add a used-state record if you need strict single use. |
+| Authorization-code interception and injection | **Not fully mitigated.** The state binds the callback to the browser, not the code. An attacker holding a victim's unused code can submit it with the attacker's own valid state and nonce. URL cleanup, `no-referrer` and short code lifetimes reduce exposure. PKCE is the recommended future enhancement where the provider supports it (Google; LinkedIn only for native apps). |
+| Identity from ID-token claims | Not used: identity comes from the OIDC UserInfo endpoint after a direct, client-authenticated code exchange. If you rely on ID-token claims, validate the signature (`jwks_uri`), `iss`, `aud`, `exp` and any `nonce`. |
+| Provider token refresh or rotation | Not applicable: no offline access is requested, no refresh token is issued, and the access token is used once and discarded. Application-session lifetime and rotation are the integrator's responsibility. |
 | Timing side channel on HMAC comparison | Xano offers no constant-time compare. Not considered practical over the network for a 256-bit HMAC. |
 | Brute force or abuse of public endpoints | Add rate limiting or bot protection. |
 | Leaked `OAUTH_STATE_SECRET` | An attacker could mint states, but would still need the victim's nonce for a cross-browser attack. Rotate the secret immediately. |
@@ -60,6 +63,6 @@ bound into that state. The nonce exists only in the starting tab's `sessionStora
 |---|---|
 | Random `state` stored only in the browser and compared on the callback page | Depends entirely on frontend correctness; no server-side integrity, provider binding or expiry. |
 | Server-side state table or cache | Adds a table, a cleanup job and schema changes; still needs a browser-held secret to bind the callback to the browser. |
-| PKCE only | PKCE support differs by provider and app type, so it cannot be relied on to protect every provider the same way. Signed state works for any provider that returns `state`. PKCE can be added on top where available. |
+| PKCE only | PKCE support differs by provider and app type, so it cannot be relied on to protect every provider the same way. Signed state works for any provider that returns `state`. PKCE can be added on top where available, and is recommended for code-injection protection. |
 | Cookie set by Xano | From the frontend's point of view this is a third-party cookie on the Xano domain, which browsers may block. |
 | Nonce in `localStorage` | Shared across tabs and persists after the tab closes; `sessionStorage` is narrower. |
